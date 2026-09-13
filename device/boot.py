@@ -5,6 +5,11 @@ device over the REPL - see the README. No AP/config-portal fallback
 here (that was Kano's stock firmware's job); if wifi.py is missing or
 wrong, this just prints why and main.py's own isconnected() check
 keeps it from trying to fetch anything until it's fixed.
+
+Also makes one best-effort NTP time sync once connected, since the
+device has no battery-backed RTC - main.py needs real local time for
+its optional active-hours window (config.ACTIVE_START_HOUR/
+ACTIVE_END_HOUR) and retries this itself if it fails here.
 """
 import network
 import time
@@ -28,6 +33,12 @@ def connect():
 
     if sta.isconnected():
         print('Connected:', sta.ifconfig())
+        try:
+            import ntptime
+            ntptime.settime()
+            print('Time synced (UTC):', time.localtime())
+        except Exception as e:
+            print('NTP sync failed, main.py will retry:', e)
     else:
         print('Could not connect to wifi - check wifi.py credentials.')
 

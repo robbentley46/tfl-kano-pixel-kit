@@ -11,3 +11,18 @@ Note tfl.py currently queries the DLR-specific arrivals endpoint
 swap `modes=dlr` above and the line id in tfl.py's PATH accordingly.
 """
 STOP_ID = "940GZZDLXXX"
+
+# Optional: restrict polling/display to a daily local-time window, so
+# the board goes dark and stops hitting the API overnight instead of
+# glowing in a bedroom or beeping through your sleep. 24h clock,
+# start inclusive / end exclusive. Wraps past midnight if START > END
+# (e.g. 22 -> 6 means active 22:00-06:00). Leave both unset, or equal
+# to each other, to disable the window and stay always-on.
+ACTIVE_START_HOUR = 7
+ACTIVE_END_HOUR = 23
+
+# Hours to add to UTC to get local time, used only for the window
+# above - the device has no battery-backed RTC, so it syncs UTC via
+# NTP over wifi. Not adjusted for DST automatically; update by hand
+# when the clocks change (UK: 0 for GMT, 1 for BST).
+UTC_OFFSET_HOURS = 0

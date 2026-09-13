@@ -23,6 +23,15 @@ reconnecting for the lifetime of the run - it kicks off a fresh
 non-blocking sta.connect() every RECONNECT_INTERVAL_SECONDS while
 disconnected, rather than blocking the render loop the way boot.py's
 one-shot connect does.
+
+ACTIVE_START_HOUR/ACTIVE_END_HOUR in config.py (optional) restrict
+fetching and lighting up the display to a daily local-time window -
+e.g. so it doesn't glow or poll the API overnight. The device has no
+battery-backed RTC, so telling local time requires an NTP sync over
+wifi (boot.py does one best-effort sync; this file retries/re-syncs
+periodically in case that failed or the RTC has drifted). Until a
+sync succeeds, or if no window is configured, the window check fails
+open (always active) rather than risk going dark for good on a guess.
 """
 import time
 import network
@@ -36,12 +45,19 @@ try:
 except ImportError:
     wifi = None
 
+try:
+    import ntptime
+except ImportError:
+    ntptime = None
+
 STOP_ID = config.STOP_ID
 REFRESH_SECONDS = 30
 DISPLAY_SECONDS = 5
 MAX_DEPARTURES_SHOWN = 3
 RECONNECT_INTERVAL_SECONDS = 10
 STALE_AFTER_SECONDS = 300  # fall back to "no data" if nothing refreshes this long
+NTP_RETRY_INTERVAL_SECONDS = 60          # until the first successful sync
+NTP_RESYNC_INTERVAL_SECONDS = 6 * 60 * 60  # periodic re-sync after that
 
 URGENT_THRESHOLD_MIN = 7   # below this: red
 SOON_THRESHOLD_MIN = 8     # at or below this (but not urgent): amber, above: green
@@ -123,6 +139,35 @@ def draw_status_icons(wifi_down, stale):
         kit.set_pixel(15, 5, STALE_ICON_COLOR)
 
 
+def sync_time():
+    if ntptime is None:
+        return False
+    try:
+        ntptime.settime()  # sets the RTC to UTC
+        return True
+    except Exception as e:
+        print('ntp sync failed:', e)
+        return False
+
+
+def in_active_window(time_synced):
+    """Whether the display should be fetching/showing data right now.
+    Fails open (always active) if no window is configured, or if we
+    don't yet know the real local time - going dark indefinitely on a
+    guess would be worse than occasionally lighting up when it needn't."""
+    start = getattr(config, 'ACTIVE_START_HOUR', None)
+    end = getattr(config, 'ACTIVE_END_HOUR', None)
+    if start is None or end is None or start == end:
+        return True
+    if not time_synced:
+        return True
+    offset_seconds = getattr(config, 'UTC_OFFSET_HOURS', 0) * 3600
+    hour = time.localtime(time.time() + offset_seconds)[3]
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end  # window wraps past midnight
+
+
 def main():
     sta = network.WLAN(network.STA_IF)
 
@@ -131,6 +176,8 @@ def main():
     last_switch = time.ticks_ms()
     current_index = 0
     last_reconnect_attempt = time.ticks_ms() - RECONNECT_INTERVAL_SECONDS * 1000
+    last_time_sync = time.ticks_ms() - NTP_RETRY_INTERVAL_SECONDS * 1000
+    time_synced = False
 
     while True:
         now = time.ticks_ms()
@@ -147,7 +194,16 @@ def main():
                     print('reconnect attempt failed:', e)
                 last_reconnect_attempt = now
 
-        due_refresh = departures is None or time.ticks_diff(now, last_fetch) > REFRESH_SECONDS * 1000
+        sync_interval = NTP_RESYNC_INTERVAL_SECONDS if time_synced else NTP_RETRY_INTERVAL_SECONDS
+        due_sync = time.ticks_diff(now, last_time_sync) > sync_interval * 1000
+        if sta.isconnected() and due_sync:
+            if sync_time():
+                time_synced = True
+            last_time_sync = now
+
+        active = in_active_window(time_synced)
+
+        due_refresh = active and (departures is None or time.ticks_diff(now, last_fetch) > REFRESH_SECONDS * 1000)
         if due_refresh and sta.isconnected():
             new_data = fetch_departures()
             if new_data is not None:
@@ -157,27 +213,30 @@ def main():
 
         stale = departures is not None and time.ticks_diff(now, last_fetch) > STALE_AFTER_SECONDS * 1000
 
-        if departures and not stale:
-            if time.ticks_diff(now, last_switch) > DISPLAY_SECONDS * 1000:
-                shown = min(len(departures), MAX_DEPARTURES_SHOWN)
-                current_index = (current_index + 1) % shown
-                last_switch = now
+        if active:
+            if departures and not stale:
+                if time.ticks_diff(now, last_switch) > DISPLAY_SECONDS * 1000:
+                    shown = min(len(departures), MAX_DEPARTURES_SHOWN)
+                    current_index = (current_index + 1) % shown
+                    last_switch = now
 
-            dep = departures[current_index]
-            elapsed = time.ticks_diff(now, last_fetch) / 1000.0
-            remaining = max(0, dep['timeToStation'] - elapsed)
-            minutes = int(remaining // 60)
+                dep = departures[current_index]
+                elapsed = time.ticks_diff(now, last_fetch) / 1000.0
+                remaining = max(0, dep['timeToStation'] - elapsed)
+                minutes = int(remaining // 60)
 
-            blink_on = True
-            if remaining < 60:
-                blink_on = (now // 500) % 2 == 0
+                blink_on = True
+                if remaining < 60:
+                    blink_on = (now // 500) % 2 == 0
 
-            dest_color = dest_color_for(dep['destinationName'])
-            draw_countdown(minutes, dest_color, blink_on)
+                dest_color = dest_color_for(dep['destinationName'])
+                draw_countdown(minutes, dest_color, blink_on)
+            else:
+                draw_no_data()
+            draw_status_icons(wifi_down=not sta.isconnected(), stale=stale)
         else:
-            draw_no_data()
+            kit.clear()
 
-        draw_status_icons(wifi_down=not sta.isconnected(), stale=stale)
         kit.render()
 
         time.sleep_ms(100)
