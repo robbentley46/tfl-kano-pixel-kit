@@ -66,14 +66,12 @@ own stop ID (the example file explains how to find it via the TfL API).
 With the Pixel Kit connected over USB:
 
 ```
-mpremote cp device/boot.py :boot.py
-mpremote cp device/PixelKit.py :PixelKit.py
-mpremote cp device/tfl.py :tfl.py
-mpremote cp device/font.py :font.py
-mpremote cp device/config.py :config.py
-mpremote cp device/wifi_test.py :wifi_test.py
-mpremote reset
+./deploy.sh
 ```
+
+(This runs `mpremote cp` for each file in `device/` - except
+`wifi.py`, see step 3 - and resets the device. If mpremote can't
+auto-detect your device, set `PORT=/dev/cu.usbserial-XXXX` first.)
 
 `PixelKit.py` here is vendored from the Kano community's
 [pixel32](https://github.com/murilopolese/kano-pixel-kit-pixel32) repo
@@ -128,9 +126,12 @@ the top of `tfl.py` - that's the most likely culprit on this chip.
 ## 5. Deploy the full app
 
 ```
-mpremote cp device/main.py :main.py
-mpremote reset
+./deploy.sh
 ```
+
+(Once `wifi.py` and everything else is already on the device, and
+you're only iterating on `main.py`, `./deploy.sh main` skips the rest
+and just pushes that one file.)
 
 The device now runs standalone: on every power-up/reset it connects to
 WiFi via `boot.py`, then `main.py` takes over the display permanently.
