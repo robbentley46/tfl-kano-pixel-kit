@@ -24,9 +24,12 @@ REFRESH_SECONDS = 30
 DISPLAY_SECONDS = 5
 MAX_DEPARTURES_SHOWN = 3
 
-URGENT_COLOR = [10, 0, 0]    # < 7 min: red
-SOON_COLOR = [10, 6, 0]      # 7-8 min: amber
-CLEAR_COLOR = [0, 10, 0]     # > 8 min: green
+URGENT_THRESHOLD_MIN = 7   # below this: red
+SOON_THRESHOLD_MIN = 8     # at or below this (but not urgent): amber, above: green
+
+URGENT_COLOR = [10, 0, 0]    # red
+SOON_COLOR = [10, 6, 0]      # amber
+CLEAR_COLOR = [0, 10, 0]     # green
 DEFAULT_DEST_COLOR = [8, 8, 8]
 NO_DATA_COLOR = [10, 0, 0]
 
@@ -57,9 +60,9 @@ def fetch_departures():
 
 
 def urgency_color(minutes):
-    if minutes < 7:
+    if minutes < URGENT_THRESHOLD_MIN:
         return URGENT_COLOR
-    if minutes <= 8:
+    if minutes <= SOON_THRESHOLD_MIN:
         return SOON_COLOR
     return CLEAR_COLOR
 
