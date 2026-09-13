@@ -1,0 +1,13 @@
+"""
+Your local TfL stop point. Copy this to config.py (gitignored) and
+fill in your own - not committed, so your station stays private.
+
+Find your stop ID:
+    curl -s "https://api.tfl.gov.uk/StopPoint/Search/<your station name>?modes=dlr"
+Look for the "id" field (looks like "940GZZDLXXX" for DLR stations).
+
+Note tfl.py currently queries the DLR-specific arrivals endpoint
+(/Line/dlr/Arrivals/<id>) - if your station is on a different mode,
+swap `modes=dlr` above and the line id in tfl.py's PATH accordingly.
+"""
+STOP_ID = "940GZZDLXXX"

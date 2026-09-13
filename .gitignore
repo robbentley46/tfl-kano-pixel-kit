@@ -1,0 +1,5 @@
+device/wifi.py
+device/config.py
+.venv/
+firmware/*.bin
+.DS_Store
