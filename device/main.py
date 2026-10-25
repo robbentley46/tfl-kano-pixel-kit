@@ -83,7 +83,7 @@ except ImportError:
 STOP_ID = config.STOP_ID
 REFRESH_SECONDS = 30
 RETRY_INTERVAL_SECONDS = 15  # min gap between fetch attempts, so failures don't hammer the API
-DISPLAY_SECONDS = 5
+DISPLAY_SECONDS = 3
 MAX_DEPARTURES_SHOWN = 3
 RECONNECT_INTERVAL_SECONDS = 10
 STALE_AFTER_SECONDS = 300  # fall back to "no data" if nothing refreshes this long

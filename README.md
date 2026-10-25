@@ -154,7 +154,7 @@ keep working.
   departure, compare its raw fields (`mpremote run device/wifi_test.py`
   vs a manual `curl` of the TfL endpoint) the same way this repo's
   history did.
-- `REFRESH_SECONDS` (30s) and `DISPLAY_SECONDS` (5s per departure) in
+- `REFRESH_SECONDS` (30s) and `DISPLAY_SECONDS` (3s per screen) in
   `main.py` are easy to tune.
 - The board can go dark outside a daily window instead of running
   24/7 - set `ACTIVE_START_HOUR`/`ACTIVE_END_HOUR` (plus
@@ -179,7 +179,7 @@ keep working.
 
 Set `LATITUDE`/`LONGITUDE` in `device/config.py` (see
 `config.py.example` for how to get your station's coordinates from
-TfL) and each pass through the departures is followed by two 5-second
+TfL) and each pass through the departures is followed by two 3-second
 weather screens, from [Open-Meteo](https://open-meteo.com) (free, no
 API key):
 
