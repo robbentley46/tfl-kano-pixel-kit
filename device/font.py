@@ -1,6 +1,6 @@
 """3x5 pixel font, '1' = lit, rows top-to-bottom.
 
-Letters are only the ones the error codes in main.py/tfl.py need, in
+Letters are only the ones the error codes in app.py/net.py need, in
 whichever case reads best at 3x5 (hence the mixed case - 'd' and 'b'
 can't both be capitals and stay distinct from '0' and '8').
 """
@@ -26,6 +26,7 @@ GLYPHS = {
     'i': ["010", "000", "010", "010", "010"],
     'J': ["001", "001", "001", "101", "111"],
     'L': ["100", "100", "100", "100", "111"],
+    'M': ["101", "111", "111", "101", "101"],
     'n': ["000", "000", "110", "101", "101"],
     'o': ["000", "000", "111", "101", "111"],
     'r': ["000", "000", "111", "100", "100"],

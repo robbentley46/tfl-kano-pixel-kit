@@ -1,15 +1,10 @@
 """
 TfL Unified API client - fetches and filters DLR arrivals for one stop.
-The HTTPS plumbing (and FetchError, with its stage codes) lives in
+The HTTPS/JSON plumbing (and FetchError, with its stage codes) lives in
 net.py, shared with weather.py; FetchError is re-exported here so
 callers can keep catching tfl.FetchError.
 """
-try:
-    import ujson
-except ImportError:
-    import json as ujson
-
-from net import FetchError, https_get
+from net import FetchError, https_get_json
 
 HOST = 'api.tfl.gov.uk'
 PATH = '/Line/dlr/Arrivals/{}'
@@ -18,17 +13,14 @@ PATH = '/Line/dlr/Arrivals/{}'
 def get_departures(stop_id):
     """Return [{'timeToStation': seconds, 'destinationName': str}, ...]
     or raise FetchError."""
-    status, body = https_get(HOST, PATH.format(stop_id))
-    if status != 200:
-        raise FetchError(str(status), body[:200])
+    data = https_get_json(HOST, PATH.format(stop_id))
     try:
-        return _parse_departures(body)
+        return _parse_departures(data)
     except Exception as e:
         raise FetchError('JSn', repr(e))
 
 
-def _parse_departures(body):
-    predictions = ujson.loads(body)
+def _parse_departures(predictions):
     return [
         {
             'timeToStation': p['timeToStation'],

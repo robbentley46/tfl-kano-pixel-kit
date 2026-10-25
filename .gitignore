@@ -3,3 +3,4 @@ device/config.py
 .venv/
 firmware/*.bin
 .DS_Store
+build/

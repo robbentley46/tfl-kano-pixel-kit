@@ -1,20 +1,15 @@
 """
 Open-Meteo client (https://open-meteo.com) - free, no API key, and with
 a tight field list the reply is ~1KB, far smaller than the TfL arrivals
-body. Uses the same net.https_get as tfl.py, so failures carry the same
-stage codes (dnS, Con, SSL, ...); main.py tells the two APIs apart.
+body. Uses the same net.https_get_json as tfl.py, so failures carry the
+same stage codes (dnS, Con, SSL, ...); app.py tells the two APIs apart.
 
 timezone=Europe/London makes the daily low/high cover the local
 calendar day. forecast_hours=RAIN_HOURS returns exactly that many
 hourly rain chances starting from the current hour - one per display
 column of the rain strip.
 """
-try:
-    import ujson
-except ImportError:
-    import json as ujson
-
-from net import FetchError, https_get
+from net import FetchError, https_get_json
 
 HOST = 'api.open-meteo.com'
 RAIN_HOURS = 16
@@ -38,17 +33,14 @@ def get_weather(lat, lon):
     """Return {'temp', 'code', 'is_day', 'low', 'high', 'rain'} - temps
     as rounded int degrees C, rain as a list of RAIN_HOURS hourly
     precipitation probabilities (%) - or raise FetchError."""
-    status, body = https_get(HOST, PATH.format(lat, lon))
-    if status != 200:
-        raise FetchError(str(status), body[:200])
+    data = https_get_json(HOST, PATH.format(lat, lon))
     try:
-        return _parse_weather(body)
+        return _parse_weather(data)
     except Exception as e:
         raise FetchError('JSn', repr(e))
 
 
-def _parse_weather(body):
-    data = ujson.loads(body)
+def _parse_weather(data):
     current = data['current']
     daily = data['daily']
     return {

@@ -4,7 +4,7 @@ Standalone Kano Pixel Kit app: connects to your WiFi, polls the TfL API
 directly (no host computer involved once running), and shows a big
 countdown-in-minutes to the next DLR departure from your local stop,
 colour-coded by destination (colour picked automatically per
-destination name - see `dest_color_for` in `main.py`), cycling through
+destination name - see `dest_color_for` in `app.py`), cycling through
 the next few trains - optionally followed by two screens of today's
 weather (see [Weather](#weather)).
 
@@ -70,9 +70,19 @@ With the Pixel Kit connected over USB:
 ./deploy.sh
 ```
 
-(This runs `mpremote cp` for each file in `device/` - except
-`wifi.py`, see step 3 - and resets the device. If mpremote can't
+(This precompiles the modules in `device/` to `.mpy` with `mpy-cross`,
+copies them and the few plain `.py` files (`boot.py`, `main.py`,
+`config.py`, `wifi_test.py` - but not `wifi.py`, see step 3) across
+with `mpremote cp`, and resets the device. If mpremote can't
 auto-detect your device, set `PORT=/dev/cu.usbserial-XXXX` first.)
+
+Precompiling isn't just for speed: compiling `app.py` on the board
+grows MicroPython's heap into the memory its TLS handshakes need, and
+fetches then fail with `SSL`/`MEM` errors until a reboot. So always
+deploy with `./deploy.sh` rather than `mpremote cp`-ing `.py` files by
+hand - and since MicroPython imports `foo.py` ahead of `foo.mpy`, the
+script also deletes any stale `.py` copies of the compiled modules
+from the board.
 
 `PixelKit.py` here is vendored from the Kano community's
 [pixel32](https://github.com/murilopolese/kano-pixel-kit-pixel32) repo
@@ -133,11 +143,12 @@ that's the most likely culprit on this chip.
 ```
 
 (Once `wifi.py` and everything else is already on the device, and
-you're only iterating on `main.py`, `./deploy.sh main` skips the rest
+you're only iterating on `app.py`, `./deploy.sh app` skips the rest
 and just pushes that one file.)
 
 The device now runs standalone: on every power-up/reset it connects to
-WiFi via `boot.py`, then `main.py` takes over the display permanently.
+WiFi via `boot.py`, then `main.py` (a two-line stub that runs `app.py`)
+takes over the display permanently.
 No laptop, phone, or other device needs to be on the network for it to
 keep working.
 
@@ -147,7 +158,7 @@ keep working.
   own firmware's job, and we're not using it). If WiFi credentials
   need to change, redo step 3 over USB.
 - Colours: confirmed on real hardware to be standard `[R, G, B]` order.
-  All colour constants in `main.py` (`URGENT_COLOR`, `SOON_COLOR`,
+  All colour constants in `app.py` (`URGENT_COLOR`, `SOON_COLOR`,
   `CLEAR_COLOR`, `DEST_COLOR_PALETTE`, etc.) are in that order.
 - The direction-filter in `tfl.py` (see its comments) was tuned against
   one real terminus's quirks; if your stop shows a wrong/missing
@@ -155,25 +166,25 @@ keep working.
   vs a manual `curl` of the TfL endpoint) the same way this repo's
   history did.
 - `REFRESH_SECONDS` (30s) and `DISPLAY_SECONDS` (3s per screen) in
-  `main.py` are easy to tune.
+  `app.py` are easy to tune.
 - The board can go dark outside a daily window instead of running
   24/7 - set `ACTIVE_START_HOUR`/`ACTIVE_END_HOUR` (plus
   `UTC_OFFSET_HOURS` and `AUTO_DST`, which follows UK/EU clock changes
   automatically) in `device/config.py` (see `config.py.example`). This
   needs the device's clock synced via NTP, which `boot.py` attempts
-  once at connect and `main.py` retries/re-syncs on its own; until
+  once at connect and `app.py` retries/re-syncs on its own; until
   that first sync succeeds the window check fails open (stays active)
   rather than risk going dark for good on a guess.
-- A hardware watchdog reboots the board if `main.py` stops running
+- A hardware watchdog reboots the board if `app.py` stops running
   for 2 minutes (`WATCHDOG_SECONDS`), e.g. if a network call hangs, so
   the board recovers on its own. It can't be stopped once started, so
-  interrupting `main.py` over USB (`mpremote repl`, `mpremote run`)
+  interrupting `app.py` over USB (`mpremote repl`, `mpremote run`)
   also reboots the board 2 minutes later. A deploy finishes well within
   that, but for a long REPL session set `WATCHDOG = False` in
   `device/config.py` and redeploy first.
 - WiFi drops and stale/no-data states show as small status pixels on
   row 5 of the display (between the digits and the destination bar) -
-  see `draw_status_icons` in `main.py`.
+  see `draw_status_icons` in `app.py`.
 
 ## Weather
 
@@ -192,38 +203,43 @@ API key):
    dry day; lit columns on the left mean rain soon.
 
 Weather refreshes every 30 minutes (`WEATHER_REFRESH_SECONDS` in
-`main.py`), only inside the active-hours window, and never in the same
+`app.py`), only inside the active-hours window, and never in the same
 loop pass as a TfL fetch. Leave `LATITUDE` unset to turn it off.
 
 ## Error codes
 
-When there's no usable data, the screen turns red with a short white
-code saying why. Codes stay on screen until a fetch succeeds; the
-serial log (`mpremote repl`) prints the underlying errno/detail
-alongside each one, prefixed `tfl fetch failed:` or `weather fetch
-failed:`.
+When an API's data can't be shown, its turn in the display cycle
+turns red with a short white code saying why. Codes stay until a fetch
+from that API succeeds; the serial log (`mpremote repl`) prints the
+underlying errno/detail alongside each one, prefixed `tfl fetch
+failed:` or `weather fetch failed:`, plus a snapshot of free memory.
 
 The bottom two rows of the red screen are a **source bar** saying
 which API the code came from: **teal** for TfL, **yellow** for
 weather. Both APIs go through the same HTTPS code (`net.py`), so they
 share the codes below.
 
-- A TfL failure takes over the whole board, as there are no departures
-  to show.
-- A weather failure never does: departures keep cycling, and only the
-  weather screens are replaced by a single red/yellow error screen -
-  and only once there's no recent weather left to show. Until then
-  (up to 3 hours) the last good weather stays up with the stale pixel
-  lit to say a refresh failed.
+Each API only ever replaces its own turn, so one failing doesn't hide
+the other:
+
+- A TfL failure replaces the departure screens with a single
+  red/teal error screen, and the weather screens still follow it.
+- A weather failure replaces the two weather screens with a single
+  red/yellow error screen between passes through the departures - and
+  only once there's no recent weather left to show. Until then (up to
+  3 hours) the last good weather stays up with the stale pixel lit to
+  say a refresh failed.
+- If both are failing, the two error screens alternate.
 
 | Code | Meaning |
 |---|---|
 | `404`, `429`, `503`, ... | The API answered with that HTTP status instead of 200 |
 | `wiF` | WiFi is down, so no fetch was attempted |
 | `dnS` | DNS lookup of the API's host failed |
-| `Con` | Couldn't open a socket (pool or memory exhausted), or the TCP connect failed (refused, unreachable or timed out) |
+| `Con` | Couldn't open a socket (pool exhausted), or the TCP connect failed (refused, unreachable or timed out) |
 | `SSL` | TLS handshake failed |
-| `rd` | Sending the request or reading the reply failed partway (timeout/reset), or the reply was too big to buffer in memory |
+| `MEM` | Out of memory - usually the TLS handshake, while the board's free memory is too fragmented for it. A board that's been up 10+ minutes reboots itself to clear it (see `reboot_if_out_of_memory` in `app.py`); seeing it soon after boot means something's using too much memory, e.g. `.py` modules deployed without `./deploy.sh` |
+| `rd` | Sending the request or reading the reply failed partway (timeout/reset) |
 | `bAd` | The reply had no valid HTTP status line |
 | `JSn` | HTTP 200, but the body wasn't the JSON shape expected |
 | `Err` | Anything else unexpected - check the serial log |
