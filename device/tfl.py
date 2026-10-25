@@ -52,7 +52,12 @@ def _https_get(host, path, port=443, timeout=10):
         addr = socket.getaddrinfo(host, port)[0][-1]
     except Exception as e:
         raise FetchError('dnS', repr(e))
-    s = socket.socket()
+    # Can fail with ENFILE/ENOMEM if the socket pool or heap is exhausted -
+    # reported as part of the connect stage.
+    try:
+        s = socket.socket()
+    except Exception as e:
+        raise FetchError('Con', repr(e))
     try:
         s.settimeout(timeout)
         try:
@@ -82,6 +87,10 @@ def _https_get(host, path, port=443, timeout=10):
                 if not chunk:
                     break
                 response += chunk
+            # Split here rather than after the finally, so a MemoryError
+            # copying a large body out of the buffer is reported as 'rd'
+            # instead of escaping as an untagged exception.
+            header, _, body = response.partition(b'\r\n\r\n')
         except Exception as e:
             raise FetchError('rd', repr(e))
     finally:
@@ -89,7 +98,6 @@ def _https_get(host, path, port=443, timeout=10):
         # would eventually exhaust the ESP32's small socket pool and
         # turn a transient outage into a permanent one.
         s.close()
-    header, _, body = response.partition(b'\r\n\r\n')
     status_line = header.split(b'\r\n', 1)[0]
     try:
         status = int(status_line.split()[1])

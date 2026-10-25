@@ -177,9 +177,9 @@ alongside each one.
 | `404`, `429`, `503`, ... | TfL answered with that HTTP status instead of 200 |
 | `wiF` | WiFi is down, so no fetch was attempted |
 | `dnS` | DNS lookup of `api.tfl.gov.uk` failed |
-| `Con` | TCP connect failed (refused, unreachable or timed out) |
+| `Con` | Couldn't open a socket (pool or memory exhausted), or the TCP connect failed (refused, unreachable or timed out) |
 | `SSL` | TLS handshake failed |
-| `rd` | Sending the request or reading the reply failed partway (timeout/reset) |
+| `rd` | Sending the request or reading the reply failed partway (timeout/reset), or the reply was too big to buffer in memory |
 | `bAd` | The reply had no valid HTTP status line |
 | `JSn` | HTTP 200, but the body wasn't the JSON shape expected |
 | `Err` | Anything else unexpected - check the serial log |
