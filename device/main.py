@@ -175,6 +175,20 @@ def sync_time():
         return False
 
 
+def _last_sunday_1am_utc(year, month):
+    # Only used for March and October, both of which have 31 days.
+    weekday = time.localtime(time.mktime((year, month, 31, 1, 0, 0, 0, 0)))[6]  # Mon=0
+    return time.mktime((year, month, 31 - (weekday + 1) % 7, 1, 0, 0, 0, 0))
+
+
+def summer_time(utc_seconds):
+    """UK/EU summer time: from 01:00 UTC on the last Sunday of March
+    until 01:00 UTC on the last Sunday of October. The RTC holds UTC,
+    so localtime()/mktime() here are effectively gmtime()/timegm()."""
+    year = time.localtime(utc_seconds)[0]
+    return _last_sunday_1am_utc(year, 3) <= utc_seconds < _last_sunday_1am_utc(year, 10)
+
+
 def in_active_window(time_synced):
     """Whether the display should be fetching/showing data right now.
     Fails open (always active) if no window is configured, or if we
@@ -186,8 +200,11 @@ def in_active_window(time_synced):
         return True
     if not time_synced:
         return True
-    offset_seconds = getattr(config, 'UTC_OFFSET_HOURS', 0) * 3600
-    hour = time.localtime(time.time() + offset_seconds)[3]
+    now = time.time()
+    offset_hours = getattr(config, 'UTC_OFFSET_HOURS', 0)
+    if getattr(config, 'AUTO_DST', False) and summer_time(now):
+        offset_hours += 1
+    hour = time.localtime(now + offset_hours * 3600)[3]
     if start < end:
         return start <= hour < end
     return hour >= start or hour < end  # window wraps past midnight

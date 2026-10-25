@@ -154,8 +154,9 @@ keep working.
 - `REFRESH_SECONDS` (30s) and `DISPLAY_SECONDS` (5s per departure) in
   `main.py` are easy to tune.
 - The board can go dark outside a daily window instead of running
-  24/7 - set `ACTIVE_START_HOUR`/`ACTIVE_END_HOUR` (and `UTC_OFFSET_HOURS`
-  for DST) in `device/config.py` (see `config.py.example`). This
+  24/7 - set `ACTIVE_START_HOUR`/`ACTIVE_END_HOUR` (plus
+  `UTC_OFFSET_HOURS` and `AUTO_DST`, which follows UK/EU clock changes
+  automatically) in `device/config.py` (see `config.py.example`). This
   needs the device's clock synced via NTP, which `boot.py` attempts
   once at connect and `main.py` retries/re-syncs on its own; until
   that first sync succeeds the window check fails open (stays active)

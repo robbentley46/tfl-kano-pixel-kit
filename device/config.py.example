@@ -23,6 +23,12 @@ ACTIVE_END_HOUR = 23
 
 # Hours to add to UTC to get local time, used only for the window
 # above - the device has no battery-backed RTC, so it syncs UTC via
-# NTP over wifi. Not adjusted for DST automatically; update by hand
-# when the clocks change (UK: 0 for GMT, 1 for BST).
+# NTP over wifi. This is the *winter* (standard time) offset - UK: 0.
 UTC_OFFSET_HOURS = 0
+
+# Add an hour automatically during UK/EU summer time (last Sunday of
+# March to last Sunday of October, switching at 01:00 UTC), so the
+# window above doesn't drift by an hour when the clocks change. Set
+# False if your region doesn't follow that rule, and adjust
+# UTC_OFFSET_HOURS by hand instead.
+AUTO_DST = True
