@@ -37,7 +37,9 @@ class FetchError(Exception):
     for the serial log."""
 
     def __init__(self, code, detail=''):
-        Exception.__init__(self, code, detail)
+        # super() rather than Exception.__init__(self, ...) - MicroPython's
+        # built-in Exception type doesn't expose __init__ as an attribute.
+        super().__init__(code, detail)
         self.code = code
         self.detail = detail
 
