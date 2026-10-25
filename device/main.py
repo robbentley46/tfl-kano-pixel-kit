@@ -39,8 +39,17 @@ wifi (boot.py does one best-effort sync; this file retries/re-syncs
 periodically in case that failed or the RTC has drifted). Until a
 sync succeeds, or if no window is configured, the window check fails
 open (always active) rather than risk going dark for good on a guess.
+
+A hardware watchdog reboots the board if the main loop stops running
+for WATCHDOG_SECONDS. The socket timeouts in tfl.py should stop a fetch
+blocking forever, but a TLS handshake has been seen to hang past them
+on real hardware, and a reboot gets the board back within seconds.
+Once started, the ESP32 watchdog can't be stopped, so interrupting
+main.py over USB (REPL, mpremote run) also reboots the board after that
+long - set WATCHDOG = False in config.py for a long debugging session.
 """
 import time
+import machine
 import network
 import tfl
 import font
@@ -66,6 +75,7 @@ RECONNECT_INTERVAL_SECONDS = 10
 STALE_AFTER_SECONDS = 300  # fall back to "no data" if nothing refreshes this long
 NTP_RETRY_INTERVAL_SECONDS = 60          # until the first successful sync
 NTP_RESYNC_INTERVAL_SECONDS = 6 * 60 * 60  # periodic re-sync after that
+WATCHDOG_SECONDS = 120  # well past the slowest healthy fetch (a few seconds)
 
 URGENT_THRESHOLD_MIN = 7   # below this: red
 SOON_THRESHOLD_MIN = 8     # at or below this (but not urgent): amber, above: green
@@ -222,8 +232,13 @@ def main():
     time_synced = False
     last_error = None
     last_attempt = time.ticks_ms() - RETRY_INTERVAL_SECONDS * 1000
+    watchdog = None
+    if getattr(config, 'WATCHDOG', True):
+        watchdog = machine.WDT(timeout=WATCHDOG_SECONDS * 1000)
 
     while True:
+        if watchdog is not None:
+            watchdog.feed()
         now = time.ticks_ms()
 
         if not sta.isconnected():

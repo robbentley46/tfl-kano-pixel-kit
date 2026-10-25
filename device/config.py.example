@@ -32,3 +32,9 @@ UTC_OFFSET_HOURS = 0
 # False if your region doesn't follow that rule, and adjust
 # UTC_OFFSET_HOURS by hand instead.
 AUTO_DST = True
+
+# Optional: main.py starts a hardware watchdog that reboots the board if
+# it stops responding for 2 minutes (e.g. a network call hangs). It
+# can't be stopped once started, so it also reboots the board 2 minutes
+# after you interrupt main.py over USB. Set False for long REPL sessions.
+# WATCHDOG = False

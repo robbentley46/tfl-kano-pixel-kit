@@ -161,6 +161,13 @@ keep working.
   once at connect and `main.py` retries/re-syncs on its own; until
   that first sync succeeds the window check fails open (stays active)
   rather than risk going dark for good on a guess.
+- A hardware watchdog reboots the board if `main.py` stops running
+  for 2 minutes (`WATCHDOG_SECONDS`), e.g. if a network call hangs, so
+  the board recovers on its own. It can't be stopped once started, so
+  interrupting `main.py` over USB (`mpremote repl`, `mpremote run`)
+  also reboots the board 2 minutes later. A deploy finishes well within
+  that, but for a long REPL session set `WATCHDOG = False` in
+  `device/config.py` and redeploy first.
 - WiFi drops and stale/no-data states show as small status pixels on
   row 5 of the display (between the digits and the destination bar) -
   see `draw_status_icons` in `main.py`.
