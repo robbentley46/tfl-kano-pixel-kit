@@ -29,41 +29,88 @@ HOST = 'api.tfl.gov.uk'
 PATH = '/Line/dlr/Arrivals/{}'
 
 
+class FetchError(Exception):
+    """A failed fetch, tagged with a short `code` for the display - the
+    HTTP status (e.g. '503') if the server answered, otherwise a
+    mnemonic for the stage that failed (see the README's error code
+    table) - plus free-text `detail` (errno, raw status line, etc.)
+    for the serial log."""
+
+    def __init__(self, code, detail=''):
+        Exception.__init__(self, code, detail)
+        self.code = code
+        self.detail = detail
+
+
 def _https_get(host, path, port=443, timeout=10):
-    addr = socket.getaddrinfo(host, port)[0][-1]
+    """Return (status_code, body). Raises FetchError tagged with the
+    stage that failed, so a DNS failure, a refused connection and a
+    TLS problem stay distinguishable instead of all becoming OSError."""
+    try:
+        addr = socket.getaddrinfo(host, port)[0][-1]
+    except Exception as e:
+        raise FetchError('dnS', repr(e))
     s = socket.socket()
-    s.settimeout(timeout)
-    s.connect(addr)
-    # server_hostname enables SNI - required by most modern HTTPS hosts,
-    # TfL's API included. If your firmware's ussl predates SNI support
-    # this raises a TypeError; drop the kwarg and expect the handshake
-    # to then fail for real, since the host serves multiple certs.
-    s = ussl.wrap_socket(s, server_hostname=host)
-    request = (
-        'GET {} HTTP/1.0\r\n'
-        'Host: {}\r\n'
-        'Connection: close\r\n'
-        'User-Agent: pixelkit-dlr\r\n'
-        '\r\n'
-    ).format(path, host)
-    s.write(request.encode())
-    response = b''
-    while True:
-        chunk = s.read(512)
-        if not chunk:
-            break
-        response += chunk
-    s.close()
+    try:
+        s.settimeout(timeout)
+        try:
+            s.connect(addr)
+        except Exception as e:
+            raise FetchError('Con', repr(e))
+        # server_hostname enables SNI - required by most modern HTTPS hosts,
+        # TfL's API included. If your firmware's ussl predates SNI support
+        # this raises a TypeError; drop the kwarg and expect the handshake
+        # to then fail for real, since the host serves multiple certs.
+        try:
+            s = ussl.wrap_socket(s, server_hostname=host)
+        except Exception as e:
+            raise FetchError('SSL', repr(e))
+        request = (
+            'GET {} HTTP/1.0\r\n'
+            'Host: {}\r\n'
+            'Connection: close\r\n'
+            'User-Agent: pixelkit-dlr\r\n'
+            '\r\n'
+        ).format(path, host)
+        try:
+            s.write(request.encode())
+            response = b''
+            while True:
+                chunk = s.read(512)
+                if not chunk:
+                    break
+                response += chunk
+        except Exception as e:
+            raise FetchError('rd', repr(e))
+    finally:
+        # Always release the socket - leaking one per failed attempt
+        # would eventually exhaust the ESP32's small socket pool and
+        # turn a transient outage into a permanent one.
+        s.close()
     header, _, body = response.partition(b'\r\n\r\n')
-    return header, body
+    status_line = header.split(b'\r\n', 1)[0]
+    try:
+        status = int(status_line.split()[1])
+    except (IndexError, ValueError):
+        raise FetchError('bAd', repr(status_line))
+    if not 100 <= status <= 999:  # must fit the 3-digit display
+        raise FetchError('bAd', repr(status_line))
+    return status, body
 
 
 def get_departures(stop_id):
-    """Return [{'timeToStation': seconds, 'destinationName': str}, ...]"""
-    header, body = _https_get(HOST, PATH.format(stop_id))
-    status_line = header.split(b'\r\n', 1)[0]
-    if b'200' not in status_line:
-        raise Exception('HTTP error: {}'.format(status_line))
+    """Return [{'timeToStation': seconds, 'destinationName': str}, ...]
+    or raise FetchError."""
+    status, body = _https_get(HOST, PATH.format(stop_id))
+    if status != 200:
+        raise FetchError(str(status), body[:200])
+    try:
+        return _parse_departures(body)
+    except Exception as e:
+        raise FetchError('JSn', repr(e))
+
+
+def _parse_departures(body):
     predictions = ujson.loads(body)
     return [
         {

@@ -18,6 +18,13 @@ currently down and a reconnect is being attempted; a lit pixel in the
 bottom-right corner means the displayed data is stale (no successful
 refresh in a while) even if it's still on screen.
 
+When there's nothing to show because fetching is failing, the screen
+goes red with a short white code saying why: the HTTP status (e.g.
+503) if TfL answered, otherwise a mnemonic for the step that failed
+(dnS, Con, SSL, ...) - see the README's table. A successful fetch that
+simply has no departures in it isn't an error, so it gets a calm dim
+"--" on black instead of the red screen.
+
 boot.py only tries wifi once, with no retry, so this file owns
 reconnecting for the lifetime of the run - it kicks off a fresh
 non-blocking sta.connect() every RECONNECT_INTERVAL_SECONDS while
@@ -52,6 +59,7 @@ except ImportError:
 
 STOP_ID = config.STOP_ID
 REFRESH_SECONDS = 30
+RETRY_INTERVAL_SECONDS = 15  # min gap between fetch attempts, so failures don't hammer the API
 DISPLAY_SECONDS = 5
 MAX_DEPARTURES_SHOWN = 3
 RECONNECT_INTERVAL_SECONDS = 10
@@ -66,7 +74,9 @@ URGENT_COLOR = [10, 0, 0]    # red
 SOON_COLOR = [10, 6, 0]      # amber
 CLEAR_COLOR = [0, 10, 0]     # green
 DEFAULT_DEST_COLOR = [8, 8, 8]
-NO_DATA_COLOR = [10, 0, 0]
+ERROR_BG_COLOR = [10, 0, 0]
+ERROR_TEXT_COLOR = [10, 10, 10]
+NO_DEPARTURES_COLOR = [4, 4, 4]
 
 WIFI_DOWN_ICON_COLOR = [10, 6, 0]  # amber, matches SOON_COLOR's "warning" tone
 STALE_ICON_COLOR = [6, 6, 6]       # dim white, deliberately distinct from urgency colours
@@ -88,13 +98,17 @@ def dest_color_for(name):
 
 
 def fetch_departures():
+    """Return (departures, None) on success, or (None, error_code)."""
     try:
         data = tfl.get_departures(STOP_ID)
-        data.sort(key=lambda d: d['timeToStation'])
-        return data
+    except tfl.FetchError as e:
+        print('fetch failed:', e.code, e.detail)
+        return None, e.code
     except Exception as e:
-        print('fetch failed:', e)
-        return None
+        print('fetch failed:', repr(e))
+        return None, 'Err'
+    data.sort(key=lambda d: d['timeToStation'])
+    return data, None
 
 
 def urgency_color(minutes):
@@ -105,26 +119,37 @@ def urgency_color(minutes):
     return CLEAR_COLOR
 
 
-def draw_countdown(minutes, dest_color, blink_on):
-    kit.clear()
-    minutes = max(0, min(minutes, 99))
-    text = '{:02d}'.format(minutes)
-    digit_color = urgency_color(minutes) if blink_on else [0, 0, 0]
-    x = 4
+def draw_text(text, color):
+    """Draw up to 3 glyphs on rows 0-4, horizontally centred."""
+    x = (kit.WIDTH - (len(text) * 4 - 1)) // 2
     for ch in text:
-        glyph = font.DIGITS[ch]
+        glyph = font.GLYPHS[ch]
         for row in range(5):
             for col in range(3):
                 if glyph[row][col] == '1':
-                    kit.set_pixel(x + col, row, digit_color)
+                    kit.set_pixel(x + col, row, color)
         x += 4
+
+
+def draw_countdown(minutes, dest_color, blink_on):
+    kit.clear()
+    minutes = max(0, min(minutes, 99))
+    digit_color = urgency_color(minutes) if blink_on else [0, 0, 0]
+    draw_text('{:02d}'.format(minutes), digit_color)
     for col in range(16):
         kit.set_pixel(col, 6, dest_color)
         kit.set_pixel(col, 7, dest_color)
 
 
-def draw_no_data():
-    kit.set_background(NO_DATA_COLOR)
+def draw_error(code):
+    kit.set_background(ERROR_BG_COLOR)
+    if code:
+        draw_text(code, ERROR_TEXT_COLOR)
+
+
+def draw_no_departures():
+    kit.clear()
+    draw_text('--', NO_DEPARTURES_COLOR)
 
 
 def draw_status_icons(wifi_down, stale):
@@ -178,6 +203,8 @@ def main():
     last_reconnect_attempt = time.ticks_ms() - RECONNECT_INTERVAL_SECONDS * 1000
     last_time_sync = time.ticks_ms() - NTP_RETRY_INTERVAL_SECONDS * 1000
     time_synced = False
+    last_error = None
+    last_attempt = time.ticks_ms() - RETRY_INTERVAL_SECONDS * 1000
 
     while True:
         now = time.ticks_ms()
@@ -203,13 +230,26 @@ def main():
 
         active = in_active_window(time_synced)
 
-        due_refresh = active and (departures is None or time.ticks_diff(now, last_fetch) > REFRESH_SECONDS * 1000)
-        if due_refresh and sta.isconnected():
-            new_data = fetch_departures()
-            if new_data is not None:
-                departures = new_data
-                last_fetch = now
-                current_index = 0
+        # last_fetch only advances on success, so without the last_attempt
+        # gate a failing fetch would be retried on every loop pass.
+        due_refresh = (
+            active
+            and (departures is None or time.ticks_diff(now, last_fetch) > REFRESH_SECONDS * 1000)
+            and time.ticks_diff(now, last_attempt) > RETRY_INTERVAL_SECONDS * 1000
+        )
+        if due_refresh:
+            if sta.isconnected():
+                last_attempt = now
+                new_data, error = fetch_departures()
+                if new_data is not None:
+                    departures = new_data
+                    last_fetch = now
+                    current_index = 0
+                    last_error = None
+                else:
+                    last_error = error
+            else:
+                last_error = 'wiF'
 
         stale = departures is not None and time.ticks_diff(now, last_fetch) > STALE_AFTER_SECONDS * 1000
 
@@ -231,8 +271,10 @@ def main():
 
                 dest_color = dest_color_for(dep['destinationName'])
                 draw_countdown(minutes, dest_color, blink_on)
+            elif departures == [] and not stale:
+                draw_no_departures()
             else:
-                draw_no_data()
+                draw_error(last_error)
             draw_status_icons(wifi_down=not sta.isconnected(), stale=stale)
         else:
             kit.clear()

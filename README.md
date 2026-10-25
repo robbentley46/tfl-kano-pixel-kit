@@ -163,3 +163,26 @@ keep working.
 - WiFi drops and stale/no-data states show as small status pixels on
   row 5 of the display (between the digits and the destination bar) -
   see `draw_status_icons` in `main.py`.
+
+## Error codes
+
+When there's no usable data, the screen turns red with a short white
+code saying why. Codes stay on screen until a fetch succeeds; the
+serial log (`mpremote repl`) prints the underlying errno/detail
+alongside each one.
+
+| Code | Meaning |
+|---|---|
+| `404`, `429`, `503`, ... | TfL answered with that HTTP status instead of 200 |
+| `wiF` | WiFi is down, so no fetch was attempted |
+| `dnS` | DNS lookup of `api.tfl.gov.uk` failed |
+| `Con` | TCP connect failed (refused, unreachable or timed out) |
+| `SSL` | TLS handshake failed |
+| `rd` | Sending the request or reading the reply failed partway (timeout/reset) |
+| `bAd` | The reply had no valid HTTP status line |
+| `JSn` | HTTP 200, but the body wasn't the JSON shape expected |
+| `Err` | Anything else unexpected - check the serial log |
+
+A dim `--` on a black background is *not* an error: TfL answered fine
+but there are no upcoming departures (e.g. overnight, or the line is
+suspended).
