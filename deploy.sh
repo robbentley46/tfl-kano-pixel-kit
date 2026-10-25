@@ -28,7 +28,7 @@ if [ -n "${PORT:-}" ]; then
     mpremote_cmd=(mpremote connect "$PORT")
 fi
 
-full_files=(boot.py PixelKit.py tfl.py font.py config.py wifi_test.py main.py)
+full_files=(boot.py PixelKit.py net.py tfl.py weather.py font.py icons.py config.py wifi_test.py main.py)
 
 mode="${1:-full}"
 case "$mode" in

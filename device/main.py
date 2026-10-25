@@ -12,6 +12,12 @@ automatically per destination name, not hardcoded, so no station
 names need to live in this file). Cycles through the next few
 departures. Flashes when a train is due in under a minute.
 
+If LATITUDE/LONGITUDE are set in config.py, each pass through the
+departures is followed by two weather screens (Open-Meteo, see
+weather.py): an icon plus the current temperature, then today's low
+(blue) and high (amber) above a 16-column rain strip - one column per
+hour from now, brighter blue for a higher chance of rain.
+
 Row 5 (the gap between the digits and the destination bar) doubles as
 a status strip: a lit pixel in the bottom-left corner means wifi is
 currently down and a reconnect is being attempted; a lit pixel in the
@@ -21,7 +27,12 @@ refresh in a while) even if it's still on screen.
 When there's nothing to show because fetching is failing, the screen
 goes red with a short white code saying why: the HTTP status (e.g.
 503) if TfL answered, otherwise a mnemonic for the step that failed
-(dnS, Con, SSL, ...) - see the README's table. A successful fetch that
+(dnS, Con, SSL, ...) - see the README's table. The bottom two rows of
+the red screen are a source bar saying which API failed: teal for TfL,
+yellow for weather. A weather failure never takes over the board - it
+only replaces the weather screens in the cycle, and only once there's
+no recent cached weather left to show (until then the cached weather
+stays up with the stale pixel lit). A successful fetch that
 simply has no departures in it isn't an error, so it gets a calm dim
 "--" on black instead of the red screen.
 
@@ -41,17 +52,20 @@ sync succeeds, or if no window is configured, the window check fails
 open (always active) rather than risk going dark for good on a guess.
 
 A hardware watchdog reboots the board if the main loop stops running
-for WATCHDOG_SECONDS. The socket timeouts in tfl.py should stop a fetch
+for WATCHDOG_SECONDS. The socket timeouts in net.py should stop a fetch
 blocking forever, but a TLS handshake has been seen to hang past them
 on real hardware, and a reboot gets the board back within seconds.
 Once started, the ESP32 watchdog can't be stopped, so interrupting
 main.py over USB (REPL, mpremote run) also reboots the board after that
 long - set WATCHDOG = False in config.py for a long debugging session.
 """
+import gc
 import time
 import machine
 import network
 import tfl
+import weather
+import icons
 import font
 import config
 import PixelKit as kit
@@ -75,6 +89,10 @@ RECONNECT_INTERVAL_SECONDS = 10
 STALE_AFTER_SECONDS = 300  # fall back to "no data" if nothing refreshes this long
 NTP_RETRY_INTERVAL_SECONDS = 60          # until the first successful sync
 NTP_RESYNC_INTERVAL_SECONDS = 6 * 60 * 60  # periodic re-sync after that
+WEATHER_REFRESH_SECONDS = 30 * 60
+WEATHER_RETRY_SECONDS = 5 * 60
+WEATHER_STALE_AFTER_SECONDS = 3 * 60 * 60  # stop showing cached weather after this
+RAIN_MIN_PERCENT = 20  # rain strip ignores chances below this, to cut noise
 WATCHDOG_SECONDS = 120  # well past the slowest healthy fetch (a few seconds)
 
 URGENT_THRESHOLD_MIN = 7   # below this: red
@@ -87,6 +105,12 @@ DEFAULT_DEST_COLOR = [8, 8, 8]
 ERROR_BG_COLOR = [10, 0, 0]
 ERROR_TEXT_COLOR = [10, 10, 10]
 NO_DEPARTURES_COLOR = [4, 4, 4]
+TFL_SOURCE_COLOR = [0, 8, 8]        # error screen source bar: TfL failed
+WEATHER_SOURCE_COLOR = [10, 10, 0]  # error screen source bar: weather failed
+
+WEATHER_TEMP_COLOR = [8, 8, 8]
+LOW_TEMP_COLOR = [0, 4, 10]   # blue
+HIGH_TEMP_COLOR = [10, 6, 0]  # amber
 
 WIFI_DOWN_ICON_COLOR = [10, 6, 0]  # amber, matches SOON_COLOR's "warning" tone
 STALE_ICON_COLOR = [6, 6, 6]       # dim white, deliberately distinct from urgency colours
@@ -109,16 +133,30 @@ def dest_color_for(name):
 
 def fetch_departures():
     """Return (departures, None) on success, or (None, error_code)."""
+    gc.collect()
     try:
         data = tfl.get_departures(STOP_ID)
     except tfl.FetchError as e:
-        print('fetch failed:', e.code, e.detail)
+        print('tfl fetch failed:', e.code, e.detail)
         return None, e.code
     except Exception as e:
-        print('fetch failed:', repr(e))
+        print('tfl fetch failed:', repr(e))
         return None, 'Err'
     data.sort(key=lambda d: d['timeToStation'])
     return data, None
+
+
+def fetch_weather():
+    """Return (weather, None) on success, or (None, error_code)."""
+    gc.collect()
+    try:
+        return weather.get_weather(config.LATITUDE, config.LONGITUDE), None
+    except weather.FetchError as e:
+        print('weather fetch failed:', e.code, e.detail)
+        return None, e.code
+    except Exception as e:
+        print('weather fetch failed:', repr(e))
+        return None, 'Err'
 
 
 def urgency_color(minutes):
@@ -129,9 +167,17 @@ def urgency_color(minutes):
     return CLEAR_COLOR
 
 
+def text_width(text):
+    return len(text) * 4 - 1
+
+
 def draw_text(text, color):
     """Draw up to 3 glyphs on rows 0-4, horizontally centred."""
-    x = (kit.WIDTH - (len(text) * 4 - 1)) // 2
+    draw_glyphs(text, (kit.WIDTH - text_width(text)) // 2, color)
+
+
+def draw_glyphs(text, x, color):
+    """Draw glyphs on rows 0-4 starting at column x."""
     for ch in text:
         glyph = font.GLYPHS[ch]
         for row in range(5):
@@ -151,10 +197,52 @@ def draw_countdown(minutes, dest_color, blink_on):
         kit.set_pixel(col, 7, dest_color)
 
 
-def draw_error(code):
+def draw_error(code, source_color):
+    """Red screen with the error code, plus a 2-row bar along the
+    bottom in source_color saying which API it came from."""
     kit.set_background(ERROR_BG_COLOR)
     if code:
         draw_text(code, ERROR_TEXT_COLOR)
+    for col in range(16):
+        kit.set_pixel(col, 6, source_color)
+        kit.set_pixel(col, 7, source_color)
+
+
+def temp_text(degrees):
+    # Clamped so it always fits in 2 glyphs ('-' counts as one).
+    return str(max(-9, min(degrees, 99)))
+
+
+def draw_icon(icon, x, y):
+    for row, line in enumerate(icon):
+        for col, ch in enumerate(line):
+            if ch != '.':
+                kit.set_pixel(x + col, y + row, icons.COLORS[ch])
+
+
+def draw_weather_now(w):
+    """Icon on the left, current temperature + degree pixel on the right."""
+    kit.clear()
+    draw_icon(icons.ICONS[weather.icon_for(w['code'], w['is_day'])], 0, 0)
+    text = temp_text(w['temp'])
+    draw_glyphs(text, 16 - len(text) * 4, WEATHER_TEMP_COLOR)
+    kit.set_pixel(15, 0, WEATHER_TEMP_COLOR)
+
+
+def draw_weather_today(w):
+    """Low (left half) and high (right half), each centred in 7 columns,
+    with the hourly rain strip on rows 6-7."""
+    kit.clear()
+    for text, x, color in (
+        (temp_text(w['low']), 0, LOW_TEMP_COLOR),
+        (temp_text(w['high']), 9, HIGH_TEMP_COLOR),
+    ):
+        draw_glyphs(text, x + (7 - text_width(text)) // 2, color)
+    for col, chance in enumerate(w['rain'][:16]):
+        if chance >= RAIN_MIN_PERCENT:
+            rain_color = [0, 0, max(1, chance * 10 // 100)]
+            kit.set_pixel(col, 6, rain_color)
+            kit.set_pixel(col, 7, rain_color)
 
 
 def draw_no_departures():
@@ -232,6 +320,12 @@ def main():
     time_synced = False
     last_error = None
     last_attempt = time.ticks_ms() - RETRY_INTERVAL_SECONDS * 1000
+    weather_enabled = getattr(config, 'LATITUDE', None) is not None
+    weather_data = None
+    weather_error = None
+    last_weather_fetch = time.ticks_ms()
+    last_weather_attempt = time.ticks_ms() - WEATHER_RETRY_SECONDS * 1000
+    weather_slot = None  # None = showing departures, else 0/1 = weather screen
     watchdog = None
     if getattr(config, 'WATCHDOG', True):
         watchdog = machine.WDT(timeout=WATCHDOG_SECONDS * 1000)
@@ -282,32 +376,88 @@ def main():
                     last_error = error
             else:
                 last_error = 'wiF'
+        # elif, so a weather fetch never adds to the render freeze of a
+        # TfL fetch in the same pass.
+        elif weather_enabled and active and sta.isconnected() and (
+            (weather_data is None or time.ticks_diff(now, last_weather_fetch) > WEATHER_REFRESH_SECONDS * 1000)
+            and time.ticks_diff(now, last_weather_attempt) > WEATHER_RETRY_SECONDS * 1000
+        ):
+            last_weather_attempt = now
+            new_weather, error = fetch_weather()
+            if new_weather is not None:
+                weather_data = new_weather
+                last_weather_fetch = now
+                weather_error = None
+            else:
+                weather_error = error
 
         stale = departures is not None and time.ticks_diff(now, last_fetch) > STALE_AFTER_SECONDS * 1000
 
+        weather_usable = (
+            weather_data is not None
+            and time.ticks_diff(now, last_weather_fetch) < WEATHER_STALE_AFTER_SECONDS * 1000
+        )
+        if weather_usable:
+            weather_slots = 2
+        elif weather_error is not None:
+            weather_slots = 1  # a single error screen in place of both
+        else:
+            weather_slots = 0
+
         if active:
+            wifi_down = not sta.isconnected()
             if departures and not stale:
+                shown = min(len(departures), MAX_DEPARTURES_SHOWN)
+                if current_index >= shown:
+                    current_index = 0
+                if weather_slot is not None and weather_slot >= weather_slots:
+                    weather_slot = None
+                    current_index = 0
+
                 if time.ticks_diff(now, last_switch) > DISPLAY_SECONDS * 1000:
-                    shown = min(len(departures), MAX_DEPARTURES_SHOWN)
-                    current_index = (current_index + 1) % shown
+                    if weather_slot is not None:
+                        weather_slot += 1
+                        if weather_slot >= weather_slots:
+                            weather_slot = None
+                            current_index = 0
+                    elif current_index + 1 < shown:
+                        current_index += 1
+                    elif weather_slots:
+                        weather_slot = 0
+                    else:
+                        current_index = 0
                     last_switch = now
 
-                dep = departures[current_index]
-                elapsed = time.ticks_diff(now, last_fetch) / 1000.0
-                remaining = max(0, dep['timeToStation'] - elapsed)
-                minutes = int(remaining // 60)
+                if weather_slot is None:
+                    dep = departures[current_index]
+                    elapsed = time.ticks_diff(now, last_fetch) / 1000.0
+                    remaining = max(0, dep['timeToStation'] - elapsed)
+                    minutes = int(remaining // 60)
 
-                blink_on = True
-                if remaining < 60:
-                    blink_on = (now // 500) % 2 == 0
+                    blink_on = True
+                    if remaining < 60:
+                        blink_on = (now // 500) % 2 == 0
 
-                dest_color = dest_color_for(dep['destinationName'])
-                draw_countdown(minutes, dest_color, blink_on)
+                    dest_color = dest_color_for(dep['destinationName'])
+                    draw_countdown(minutes, dest_color, blink_on)
+                    draw_status_icons(wifi_down=wifi_down, stale=stale)
+                elif weather_usable:
+                    if weather_slot == 0:
+                        draw_weather_now(weather_data)
+                    else:
+                        draw_weather_today(weather_data)
+                    # No wifi pixel - it would land on the icon. The stale
+                    # pixel here means the last weather refresh failed and
+                    # this is cached data.
+                    draw_status_icons(wifi_down=False, stale=weather_error is not None)
+                else:
+                    draw_error(weather_error, WEATHER_SOURCE_COLOR)
             elif departures == [] and not stale:
                 draw_no_departures()
+                draw_status_icons(wifi_down=wifi_down, stale=stale)
             else:
-                draw_error(last_error)
-            draw_status_icons(wifi_down=not sta.isconnected(), stale=stale)
+                draw_error(last_error, TFL_SOURCE_COLOR)
+                draw_status_icons(wifi_down=wifi_down, stale=stale)
         else:
             kit.clear()
 

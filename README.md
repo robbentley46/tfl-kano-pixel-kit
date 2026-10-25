@@ -5,7 +5,8 @@ directly (no host computer involved once running), and shows a big
 countdown-in-minutes to the next DLR departure from your local stop,
 colour-coded by destination (colour picked automatically per
 destination name - see `dest_color_for` in `main.py`), cycling through
-the next few trains.
+the next few trains - optionally followed by two screens of today's
+weather (see [Weather](#weather)).
 
 The stop point is set in `device/config.py` (gitignored, not committed
 - see step 2) rather than hardcoded, so forking or sharing this repo
@@ -120,8 +121,10 @@ mpremote run device/wifi_test.py
 ```
 
 You should see `Connected: (...)` followed by a handful of
-`<seconds>s -> <destination>` lines. If it fails, see the SNI note at
-the top of `tfl.py` - that's the most likely culprit on this chip.
+`<seconds>s -> <destination>` lines (plus a `Weather: {...}` line if
+you've set `LATITUDE`, see [Weather](#weather), and the free heap
+around each fetch). If it fails, see the SNI note in `net.py` -
+that's the most likely culprit on this chip.
 
 ## 5. Deploy the full app
 
@@ -172,18 +175,52 @@ keep working.
   row 5 of the display (between the digits and the destination bar) -
   see `draw_status_icons` in `main.py`.
 
+## Weather
+
+Set `LATITUDE`/`LONGITUDE` in `device/config.py` (see
+`config.py.example` for how to get your station's coordinates from
+TfL) and each pass through the departures is followed by two 5-second
+weather screens, from [Open-Meteo](https://open-meteo.com) (free, no
+API key):
+
+1. **Now** - a weather icon (sun/moon, part cloud, cloud, rain, snow,
+   thunder) and the current temperature in °C.
+2. **Today** - today's low (blue, left) and high (amber, right), with
+   a rain strip along the bottom two rows: one column per hour for the
+   next 16 hours, left to right, brighter blue for a higher chance of
+   rain (chances under 20% are left dark). An all-dark strip means a
+   dry day; lit columns on the left mean rain soon.
+
+Weather refreshes every 30 minutes (`WEATHER_REFRESH_SECONDS` in
+`main.py`), only inside the active-hours window, and never in the same
+loop pass as a TfL fetch. Leave `LATITUDE` unset to turn it off.
+
 ## Error codes
 
 When there's no usable data, the screen turns red with a short white
 code saying why. Codes stay on screen until a fetch succeeds; the
 serial log (`mpremote repl`) prints the underlying errno/detail
-alongside each one.
+alongside each one, prefixed `tfl fetch failed:` or `weather fetch
+failed:`.
+
+The bottom two rows of the red screen are a **source bar** saying
+which API the code came from: **teal** for TfL, **yellow** for
+weather. Both APIs go through the same HTTPS code (`net.py`), so they
+share the codes below.
+
+- A TfL failure takes over the whole board, as there are no departures
+  to show.
+- A weather failure never does: departures keep cycling, and only the
+  weather screens are replaced by a single red/yellow error screen -
+  and only once there's no recent weather left to show. Until then
+  (up to 3 hours) the last good weather stays up with the stale pixel
+  lit to say a refresh failed.
 
 | Code | Meaning |
 |---|---|
-| `404`, `429`, `503`, ... | TfL answered with that HTTP status instead of 200 |
+| `404`, `429`, `503`, ... | The API answered with that HTTP status instead of 200 |
 | `wiF` | WiFi is down, so no fetch was attempted |
-| `dnS` | DNS lookup of `api.tfl.gov.uk` failed |
+| `dnS` | DNS lookup of the API's host failed |
 | `Con` | Couldn't open a socket (pool or memory exhausted), or the TCP connect failed (refused, unreachable or timed out) |
 | `SSL` | TLS handshake failed |
 | `rd` | Sending the request or reading the reply failed partway (timeout/reset), or the reply was too big to buffer in memory |
